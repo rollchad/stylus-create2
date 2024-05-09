@@ -1,0 +1,16 @@
+[workspace]
+
+resolver = "2"
+
+members = [
+    "crates/counter",
+    "crates/factory"
+]
+
+# This must be at the root level otherwise binaries will bloat
+[profile.release]
+codegen-units = 1
+strip = true
+lto = true
+panic = "abort"
+opt-level = "s"
