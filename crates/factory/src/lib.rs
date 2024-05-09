@@ -1,58 +1,61 @@
-//! Implements a hello-world example for Arbitrum Stylus, providing a Solidity ABI-equivalent
-//! Rust implementation of the Counter contract example provided by Foundry.
-//! Warning: this code is a template only and has not been audited.
-//! ```
-//! contract Counter {
-//!     uint256 public number;
-//!     function setNumber(uint256 newNumber) public {
-//!         number = newNumber;
-//!     }
-//!     function increment() public {
-//!         number++;
-//!     }
-//! }
-//! ```
-
-// Only run this as a WASM if the export-abi feature is not set.
 #![cfg_attr(not(feature = "export-abi"), no_main)]
 extern crate alloc;
 
-/// Initializes a custom, global allocator for Rust programs compiled to WASM.
 #[global_allocator]
 static ALLOC: mini_alloc::MiniAlloc = mini_alloc::MiniAlloc::INIT;
 
-/// Import the Stylus SDK along with alloy primitive types for use in our program.
-use stylus_sdk::{alloy_primitives::U256, prelude::*};
+use stylus_sdk::{alloy_primitives::{tiny_keccak, Address, B256, U256}, contract, deploy::RawDeploy, msg, prelude::*};
 
-// Define the entrypoint as a Solidity storage object, in this case a struct
-// called `Counter` with a single uint256 value called `number`. The sol_storage! macro
-// will generate Rust-equivalent structs with all fields mapped to Solidity-equivalent
-// storage slots and types.
 sol_storage! {
     #[entrypoint]
-    pub struct Counter {
-        uint256 number;
+    pub struct Factory {
+
     }
 }
 
-/// Define an implementation of the generated Counter struct, defining a set_number
-/// and increment method using the features of the Stylus SDK.
 #[external]
-impl Counter {
-    /// Gets the number from storage.
-    pub fn number(&self) -> Result<U256, Vec<u8>> {
-        Ok(self.number.get())
-    }
+impl Factory {
+    pub fn deploy_with_create2(&mut self) -> Result<(), Vec<u8>> {
+        let init_code = include_bytes!("./deployment_tx_data");
 
-    /// Sets a number in storage to a user-specified value.
-    pub fn set_number(&mut self, new_number: U256) -> Result<(), Vec<u8>> {
-        self.number.set(new_number);
+        let salt = B256::default();
+        let endowment = U256::ZERO;
+
+        let expected_address = get_create2_address(contract::address(), salt, init_code);
+        let actual_address = unsafe { RawDeploy::new().salt(salt).deploy(init_code, endowment)? };
+
+        assert_eq!(expected_address, actual_address);
         Ok(())
     }
+}
 
-    /// Increments number and updates it values in storage.
-    pub fn increment(&mut self) -> Result<(), Vec<u8>> {
-        let number = self.number.get();
-        self.set_number(number + U256::from(1))
-    }
+fn keccak256(bytes: &[u8]) -> [u8; 32] {
+    use tiny_keccak::{Hasher, Keccak};
+
+    let mut output = [0u8; 32];
+    let mut hasher = Keccak::v256();
+    hasher.update(bytes);
+    hasher.finalize(&mut output);
+
+    output
+}
+
+fn get_create2_address(from: Address, salt: B256, init_code: &[u8]) -> Address {
+    let init_code_hash = keccak256(init_code);
+
+    let mut bytes = Vec::with_capacity(1 + 20 + salt.len() + init_code_hash.len());
+
+    bytes.push(0xff);
+    bytes.extend_from_slice(from.as_slice());
+    bytes.extend_from_slice(salt.as_slice());
+    bytes.extend_from_slice(init_code_hash.as_slice());
+
+    let hash = keccak256(bytes.as_slice());
+
+    let mut address_bytes = [0u8; 20];
+    address_bytes.copy_from_slice(&hash[12..]);
+
+    let address = Address::from_slice(&address_bytes);
+
+    address
 }
